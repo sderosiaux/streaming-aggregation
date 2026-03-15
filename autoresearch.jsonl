@@ -69,3 +69,4 @@
 {"commit":"317e674","metric":5672149,"status":"discard","description":"experiment: fused c2+sIdx parse with nested branching — JIT regression (5672149 ev/s, -4.9%)","metrics":{},"timestamp":1773581729}
 {"commit":"317e674","metric":4570383,"status":"discard","description":"experiment: single bulk read + parallel parse — 388MB allocation GC pressure (4570383 ev/s, -23.4%)","metrics":{},"timestamp":1773581838}
 {"commit":"317e674","metric":6016847,"status":"keep","description":"experiment: bounded merge loops by active minute range per partition (6016847 ev/s, +0.8%)","metrics":{},"timestamp":1773582083}
+{"commit":"e16e317","metric":6257822,"status":"keep","description":"experiment: single-pass merge — tumbling+sliding fused in one partition/minute loop (6257822 ev/s, +4.0%)","metrics":{},"timestamp":1773582168}

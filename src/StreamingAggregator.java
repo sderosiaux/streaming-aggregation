@@ -290,34 +290,28 @@ public class StreamingAggregator {
 
         double[] combinedBuf = new double[1024]; // reusable buffer to avoid per-window allocation
         for (int s = sStart; s < sEnd; s++) {
-            // Merge tumbling for this sensor across partitions — bounded by active range
+            // Single-pass merge: tumbling + sliding together per partition
             TumblingState[] merged = new TumblingState[MAX_MINUTES];
-            boolean hasTumbling = false;
+            SlidingState[] rawMerged = new SlidingState[MAX_MINUTES];
+            boolean hasTumbling = false, hasRaw = false;
             for (PartitionState ps : parts) {
                 int lo = ps.minMinute, hi = ps.maxMinute;
                 for (int m = lo; m <= hi; m++) {
-                    TumblingState[] row = ps.tumbling[m];
-                    if (row == null || row[s] == null) continue;
-                    hasTumbling = true;
-                    if (merged[m] == null) merged[m] = row[s];
-                    else merged[m].merge(row[s]);
+                    TumblingState[] tRow = ps.tumbling[m];
+                    if (tRow != null && tRow[s] != null) {
+                        hasTumbling = true;
+                        if (merged[m] == null) merged[m] = tRow[s];
+                        else merged[m].merge(tRow[s]);
+                    }
+                    SlidingState[] sRow = ps.sliding[m];
+                    if (sRow != null && sRow[s] != null) {
+                        hasRaw = true;
+                        if (rawMerged[m] == null) rawMerged[m] = sRow[s];
+                        else rawMerged[m].merge(sRow[s]);
+                    }
                 }
             }
             mergedTumbling[s] = hasTumbling ? merged : null;
-
-            // Merge raw per-minute values across partitions — bounded by active range
-            SlidingState[] rawMerged = new SlidingState[MAX_MINUTES];
-            boolean hasRaw = false;
-            for (PartitionState ps : parts) {
-                int lo = ps.minMinute, hi = ps.maxMinute;
-                for (int m = lo; m <= hi; m++) {
-                    SlidingState[] sRow = ps.sliding[m];
-                    if (sRow == null || sRow[s] == null) continue;
-                    hasRaw = true;
-                    if (rawMerged[m] == null) rawMerged[m] = sRow[s];
-                    else rawMerged[m].merge(sRow[s]);
-                }
-            }
             if (hasRaw) {
                 // Compute sliding window percentiles by combining 5 consecutive minutes
                 double[][] pcts = new double[MAX_MINUTES][];
