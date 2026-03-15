@@ -390,17 +390,14 @@ public class StreamingAggregator {
             // Compute minute index relative to baseMs
             int eventMinute = (int) ((timestampMs - baseMs) / 60_000);
 
-            // Tumbling window [minute][sensor] layout
             if (eventMinute >= 0 && eventMinute < MAX_MINUTES) {
+                // Tumbling window
                 TumblingState[] row = ps.tumbling[eventMinute];
                 if (row == null) { row = new TumblingState[MAX_SENSORS]; ps.tumbling[eventMinute] = row; }
                 TumblingState ts = row[sIdx];
                 if (ts == null) { ts = new TumblingState(); row[sIdx] = ts; }
                 ts.add(value);
-            }
-
-            // Raw per-minute values for lazy sliding window computation
-            if (eventMinute >= 0 && eventMinute < MAX_MINUTES) {
+                // Sliding window — raw per-minute values for lazy computation
                 SlidingState[] sRow = ps.sliding[eventMinute];
                 if (sRow == null) { sRow = new SlidingState[MAX_SENSORS]; ps.sliding[eventMinute] = sRow; }
                 SlidingState ss = sRow[sIdx];

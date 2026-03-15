@@ -61,3 +61,6 @@
 {"commit":"2d8ae0a","metric":5243838,"status":"discard","description":"SoA tumbling (primitive arrays): Arrays.fill init overhead, no improvement","metrics":{},"timestamp":1773555256}
 {"commit":"2d8ae0a","metric":5302226,"status":"discard","description":"direct minute-index + merged if: within noise, JIT already optimizes","metrics":{},"timestamp":1773555386}
 {"commit":"2d8ae0a","metric":5743825,"status":"keep","description":"direct byte[] emit: eliminate StringBuilder→String→byte[] triple copy (+8.5%)","metrics":{},"timestamp":1773555636}
+{"commit":"ba2c70e","metric":5753739,"status":"discard","description":"digit-pair appendLongBytes: within noise, JIT handles division chains","metrics":{},"timestamp":1773555946}
+{"commit":"ba2c70e","metric":5617977,"status":"discard","description":"bypass BufferedOutputStream: regression, batching helps pipe writes","metrics":{},"timestamp":1773556023}
+{"commit":"ba2c70e","metric":5824111,"status":"keep","description":"experiment: merged bounds-check in processChunk — single if block for tumbling+sliding (5824111 ev/s, +1.4%)","metrics":{},"timestamp":1773581449}
