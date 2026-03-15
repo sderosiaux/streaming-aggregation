@@ -358,33 +358,27 @@ public class StreamingAggregator {
             // Parse double
             double value = parseDoubleBytesArr(data, c2 + 1, lineEnd);
 
-            // Tumbling window
-            long tumblingStart = timestampMs - (timestampMs % TUMBLING_WINDOW_MS);
-            int tMinute = (int) ((tumblingStart - baseMs) / 60_000);
-            if (tMinute >= 0 && tMinute < MAX_MINUTES) {
+            // Compute minute index relative to baseMs
+            int eventMinute = (int) ((timestampMs - baseMs) / 60_000);
+
+            // Tumbling window — same minute since TUMBLING_WINDOW = 60s = 1 minute
+            if (eventMinute >= 0 && eventMinute < MAX_MINUTES) {
                 TumblingState[] row = ps.tumbling[sIdx];
                 if (row == null) { row = new TumblingState[MAX_MINUTES]; ps.tumbling[sIdx] = row; }
-                TumblingState ts = row[tMinute];
-                if (ts == null) { ts = new TumblingState(); row[tMinute] = ts; }
+                TumblingState ts = row[eventMinute];
+                if (ts == null) { ts = new TumblingState(); row[eventMinute] = ts; }
                 ts.add(value);
             }
 
-            // Sliding windows
-            long firstSlidingStart = timestampMs - SLIDING_WINDOW_MS + SLIDING_STEP_MS;
-            firstSlidingStart = firstSlidingStart - (firstSlidingStart % SLIDING_STEP_MS);
-            if (firstSlidingStart < 0) firstSlidingStart = 0;
-
-            for (long wStart = firstSlidingStart; wStart <= timestampMs; wStart += SLIDING_STEP_MS) {
-                if (timestampMs < wStart + SLIDING_WINDOW_MS) {
-                    int sMinute = (int) ((wStart - baseMs) / 60_000);
-                    if (sMinute >= 0 && sMinute < MAX_MINUTES) {
-                        SlidingState[] row = ps.sliding[sIdx];
-                        if (row == null) { row = new SlidingState[MAX_MINUTES]; ps.sliding[sIdx] = row; }
-                        SlidingState ss = row[sMinute];
-                        if (ss == null) { ss = new SlidingState(); row[sMinute] = ss; }
-                        ss.add(value);
-                    }
-                }
+            // Sliding windows — event belongs to 5 windows (minutes eventMinute-4 to eventMinute)
+            SlidingState[] sRow = ps.sliding[sIdx];
+            if (sRow == null) { sRow = new SlidingState[MAX_MINUTES]; ps.sliding[sIdx] = sRow; }
+            int mStart = Math.max(0, eventMinute - 4);
+            int mEnd = Math.min(eventMinute, MAX_MINUTES - 1);
+            for (int m = mStart; m <= mEnd; m++) {
+                SlidingState ss = sRow[m];
+                if (ss == null) { ss = new SlidingState(); sRow[m] = ss; }
+                ss.add(value);
             }
         }
 

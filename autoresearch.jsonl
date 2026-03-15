@@ -37,3 +37,4 @@
 {"commit":"3135919","metric":3954132,"status":"keep","description":"sorted-order emit (no Collections.sort), parallel pct computation (3954132 ev/s, +13.6%)","metrics":{},"timestamp":1773552544}
 {"commit":"107feb3","metric":3548616,"status":"discard","description":"byte[] output buffer with Long.toString().getBytes(): 10% slower, alloc overhead","metrics":{},"timestamp":1773552623}
 {"commit":"107feb3","metric":4327131,"status":"keep","description":"parallel emit by minute range + BufferedOutputStream (4327131 ev/s, +9.4%)","metrics":{},"timestamp":1773552726}
+{"commit":"8d5211c","metric":4504504,"status":"keep","description":"optimized sliding window loop: int minute iteration, no modulo, no redundant checks (4504504 ev/s, +4.1%)","metrics":{},"timestamp":1773552865}
