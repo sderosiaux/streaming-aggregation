@@ -167,17 +167,21 @@ public class StreamingAggregator {
 
                 long timestampMs = parseIsoTimestamp(line, c1);
                 if (timestampMs < 0) continue;
-                String sensorId = line.substring(c1 + 1, c2);
                 double value = parseFastDouble(line, c2 + 1, line.length());
 
                 if (!baseSet) {
-                    // Set base to 15 minutes before first event to handle late data
                     baseMs = (timestampMs / 60_000 - 15) * 60_000;
                     baseSet = true;
                     ensureArrays(0);
                 }
 
-                int sIdx = getSensorIdx(sensorId);
+                // Parse sensor index directly: "sensor_NNNN" -> extract 4 digits
+                int sIdx = parseSensorIdx(line, c1 + 1, c2);
+                if (sIdx < 0 || sIdx >= MAX_SENSORS) continue;
+                if (sensorNames[sIdx] == null) {
+                    sensorNames[sIdx] = line.substring(c1 + 1, c2);
+                    if (sIdx >= sensorCount) sensorCount = sIdx + 1;
+                }
 
                 lineCount++;
                 maxEventTime = Math.max(maxEventTime, timestampMs);
@@ -259,6 +263,17 @@ public class StreamingAggregator {
 
     private static boolean isLeapYear(int year) {
         return (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0));
+    }
+
+    // Parse "sensor_NNNN" -> NNNN as int
+    private static int parseSensorIdx(String line, int start, int end) {
+        // Skip "sensor_" prefix (7 chars), parse remaining digits
+        int numStart = start + 7;
+        int idx = 0;
+        for (int i = numStart; i < end; i++) {
+            idx = idx * 10 + (line.charAt(i) - '0');
+        }
+        return idx;
     }
 
     private static double parseFastDouble(String s, int start, int end) {

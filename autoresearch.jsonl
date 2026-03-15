@@ -9,3 +9,4 @@
 {"commit":"5eb423e","metric":328558,"status":"keep","description":"array-indexed windows replacing HashMaps entirely","metrics":{},"timestamp":1773549003}
 {"commit":"9ee011b","metric":357935,"status":"keep","description":"bounded scan with floor/ceiling in emitReadyWindows","metrics":{},"timestamp":1773549130}
 {"commit":"c8abfcd","metric":1155401,"status":"keep","description":"emit every 100K instead of 10K (massive 3.2x improvement)","metrics":{},"timestamp":1773549157}
+{"commit":"4bc702a","metric":1422879,"status":"keep","description":"emit only at end, no intermediate emissions","metrics":{},"timestamp":1773549221}
