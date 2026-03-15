@@ -86,3 +86,7 @@
 {"commit":"8882905","metric":5546311,"status":"discard","description":"experiment: concat emit chunks before writing — 166MB extra allocation GC pressure (5546311 ev/s, -14.0%)","metrics":{},"timestamp":1773584216}
 {"commit":"4b2ec2c","metric":6720430,"status":"keep","description":"experiment: merge SlidingState into TumblingState — unified state eliminates redundant array dereferences (6720430 ev/s, +4.2%)","metrics":{},"timestamp":1773585192}
 {"commit":"2056fbd","metric":7283321,"status":"keep","description":"experiment: integer percentile indices + zero-copy emit buffers — eliminate Math.ceil and 168MB trim copies (7283321 ev/s, +8.4%)","metrics":{},"timestamp":1773585441}
+{"commit":"b5678ac","metric":7668711,"status":"keep","description":"experiment: mmap file reading — kernel readahead beats channel.read for parse I/O (7668711 ev/s, +5.3%)","metrics":{},"timestamp":1773585632}
+{"commit":"b5678ac","metric":7107320,"status":"discard","description":"experiment: combined sliding+tumbling emit per task — larger working set hurts cache (7107320 ev/s, -7.3%)","metrics":{},"timestamp":1773585884}
+{"commit":"b5678ac","metric":7299270,"status":"discard","description":"experiment: flat slidingP50/P99 arrays with NaN sentinel — Arrays.fill(NaN) + isNaN overhead outweighs savings (7299270 ev/s, -4.8%)","metrics":{},"timestamp":1773585956}
+{"commit":"b5678ac","metric":6756756,"status":"discard","description":"experiment: single mmap + shared data array — 388MB allocation GC pressure (6756756 ev/s, -11.9%)","metrics":{},"timestamp":1773586022}

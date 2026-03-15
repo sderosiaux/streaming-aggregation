@@ -349,6 +349,8 @@ public class StreamingAggregator {
         int pos = 0;
         while (pos < limit) {
             int lineStart = pos;
+            // Skip 31 bytes: minimum line is 32 (20 ts + 1 comma + 8 sensor_X + 1 comma + 1 digit + 1 newline)
+            pos += 31;
             while (pos < limit && data[pos] != '\n') pos++;
             int lineEnd = pos;
             pos++; // skip newline
