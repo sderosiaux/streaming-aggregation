@@ -1,0 +1,1 @@
+{"type":"config","name":"streaming-throughput","metricName":"throughput","metricUnit":"events/sec","bestDirection":"higher","maxExperiments":100}
