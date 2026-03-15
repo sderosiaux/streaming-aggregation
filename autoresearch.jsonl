@@ -3,3 +3,4 @@
 {"commit":"4ea38d0","metric":199282,"status":"keep","description":"indexOf parsing, manual ISO timestamp, StringBuilder output, double[] sliding state","metrics":{},"timestamp":1773548426}
 {"commit":"8ffd82d","metric":227588,"status":"keep","description":"single sort for both p50/p99 percentiles","metrics":{},"timestamp":1773548497}
 {"commit":"8cb0763","metric":236966,"status":"keep","description":"1MB reader buffer + sensor ID interning via HashMap","metrics":{},"timestamp":1773548561}
+{"commit":"4762190","metric":244953,"status":"keep","description":"quickselect O(n) for percentiles instead of full sort O(n log n)","metrics":{},"timestamp":1773548643}
