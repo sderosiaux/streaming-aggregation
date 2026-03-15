@@ -160,47 +160,72 @@ public class StreamingAggregator {
             }
         }
 
-        // Parallel merge+emit by sensor range
+        // Parallel merge+percentile by sensor range
         final int sc = sensorCount;
         final String[] sNames = sensorNames;
         final long bMs = baseMs;
         int sensorsPerThread = (sc + nThreads - 1) / nThreads;
-        @SuppressWarnings("unchecked")
-        Future<List<String>>[] emitFutures = new Future[nThreads];
 
+        // Shared merged arrays
+        TumblingState[][] mergedTumbling = new TumblingState[sc][];
+        // Store pre-computed percentiles: [sensor][minute] -> {p50, p99}
+        double[][][] slidingPcts = new double[sc][][];
+
+        @SuppressWarnings("unchecked")
+        Future<?>[] mergeFutures = new Future[nThreads];
         for (int t = 0; t < nThreads; t++) {
             int sStart = t * sensorsPerThread;
             int sEnd = Math.min(sStart + sensorsPerThread, sc);
-            emitFutures[t] = pool.submit(() -> mergeAndEmit(parts, sStart, sEnd, sNames, bMs));
+            mergeFutures[t] = pool.submit(() -> {
+                mergeAndComputePcts(parts, sStart, sEnd, mergedTumbling, slidingPcts);
+            });
         }
-
-        // Collect and sort all results
-        List<String> results = new ArrayList<>();
-        for (Future<List<String>> f : emitFutures) {
-            results.addAll(f.get());
-        }
+        for (Future<?> f : mergeFutures) f.get();
 
         pool.shutdown();
         channel.close();
         raf.close();
 
-        Collections.sort(results);
-        StringBuilder out = new StringBuilder(results.size() * 80);
-        for (String r : results) {
-            out.append(r).append('\n');
+        // Emit in sorted order: sliding first (lex < tumbling), then minute, then sensor
+        StringBuilder out = new StringBuilder(3_000_000 * 80);
+        StringBuilder sb = new StringBuilder(128);
+
+        // Sliding windows first
+        for (int m = 0; m < MAX_MINUTES; m++) {
+            long windowStart = bMs + (long) m * 60_000;
+            for (int s = 0; s < sc; s++) {
+                if (slidingPcts[s] == null || slidingPcts[s][m] == null) continue;
+                double[] pcts = slidingPcts[s][m];
+                sb.setLength(0);
+                sb.append("sliding,").append(windowStart).append(',')
+                  .append(sNames[s]).append(',');
+                appendDouble(sb, pcts[0]); sb.append(',');
+                appendDouble(sb, pcts[1]); sb.append(",new\n");
+                out.append(sb);
+            }
+        }
+        // Tumbling windows second
+        for (int m = 0; m < MAX_MINUTES; m++) {
+            long windowStart = bMs + (long) m * 60_000;
+            for (int s = 0; s < sc; s++) {
+                if (mergedTumbling[s] == null || mergedTumbling[s][m] == null) continue;
+                TumblingState state = mergedTumbling[s][m];
+                sb.setLength(0);
+                sb.append("tumbling,").append(windowStart).append(',')
+                  .append(sNames[s]).append(',').append(state.count).append(',');
+                appendDouble(sb, state.sum); sb.append(',');
+                appendDouble(sb, state.min); sb.append(',');
+                appendDouble(sb, state.max); sb.append(',');
+                appendDouble(sb, state.avg()); sb.append(",new\n");
+                out.append(sb);
+            }
         }
         System.out.print(out);
     }
 
-    static List<String> mergeAndEmit(PartitionState[] parts, int sStart, int sEnd,
-                                      String[] sensorNames, long baseMs) {
-        List<String> results = new ArrayList<>();
-        StringBuilder sb = new StringBuilder(128);
-
+    static void mergeAndComputePcts(PartitionState[] parts, int sStart, int sEnd,
+                                     TumblingState[][] mergedTumbling, double[][][] slidingPcts) {
         for (int s = sStart; s < sEnd; s++) {
-            String sensor = sensorNames[s];
-            if (sensor == null) continue;
-
             // Merge tumbling for this sensor
             TumblingState[] merged = null;
             for (PartitionState ps : parts) {
@@ -217,23 +242,9 @@ public class StreamingAggregator {
                     }
                 }
             }
-            if (merged != null) {
-                for (int m = 0; m < MAX_MINUTES; m++) {
-                    TumblingState state = merged[m];
-                    if (state == null) continue;
-                    long windowStart = baseMs + (long) m * 60_000;
-                    sb.setLength(0);
-                    sb.append("tumbling,").append(windowStart).append(',')
-                      .append(sensor).append(',').append(state.count).append(',');
-                    appendDouble(sb, state.sum); sb.append(',');
-                    appendDouble(sb, state.min); sb.append(',');
-                    appendDouble(sb, state.max); sb.append(',');
-                    appendDouble(sb, state.avg()); sb.append(",new");
-                    results.add(sb.toString());
-                }
-            }
+            mergedTumbling[s] = merged;
 
-            // Merge sliding for this sensor
+            // Merge sliding for this sensor + compute percentiles
             SlidingState[] sMerged = null;
             for (PartitionState ps : parts) {
                 if (ps.sliding[s] != null) {
@@ -250,21 +261,15 @@ public class StreamingAggregator {
                 }
             }
             if (sMerged != null) {
+                double[][] pcts = new double[MAX_MINUTES][];
                 for (int m = 0; m < MAX_MINUTES; m++) {
-                    SlidingState state = sMerged[m];
-                    if (state == null) continue;
-                    long windowStart = baseMs + (long) m * 60_000;
-                    double[] pcts = state.percentiles();
-                    sb.setLength(0);
-                    sb.append("sliding,").append(windowStart).append(',')
-                      .append(sensor).append(',');
-                    appendDouble(sb, pcts[0]); sb.append(',');
-                    appendDouble(sb, pcts[1]); sb.append(",new");
-                    results.add(sb.toString());
+                    if (sMerged[m] != null) {
+                        pcts[m] = sMerged[m].percentiles();
+                    }
                 }
+                slidingPcts[s] = pcts;
             }
         }
-        return results;
     }
 
     static PartitionState processChunk(FileChannel channel, long start, long end, long baseMs) throws IOException {

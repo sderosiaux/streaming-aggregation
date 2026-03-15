@@ -18,3 +18,20 @@
 {"commit":"78db04d","metric":2588661,"status":"discard","description":"pre-allocate sensor rows + hoist sRow (no improvement, memory waste)","metrics":{},"timestamp":1773549594}
 {"commit":"78db04d","metric":2590673,"status":"discard","description":"fixed-offset parsing (JIT already optimizes comma scan)","metrics":{},"timestamp":1773549643}
 {"commit":"78db04d","metric":2551671,"status":"discard","description":"smaller initial SlidingState array (more resizes, no gain)","metrics":{},"timestamp":1773549687}
+{"commit":"3135919","metric":3480682,"status":"keep","description":"parallel merge+emit by sensor range","metrics":{},"timestamp":1773549746}
+{"commit":"3135919","metric":3107520,"status":"discard","description":"Arrays.parallelSort slower for ~30K results","metrics":{},"timestamp":1773549772}
+{"commit":"3135919","metric":2847380,"status":"discard","description":"BufferedWriter output slower than StringBuilder+print","metrics":{},"timestamp":1773549797}
+{"commit":"3135919","metric":2983293,"status":"discard","description":"sorted-order emit but lost parallelism in merge+percentiles","metrics":{},"timestamp":1773549837}
+{"commit":"3135919","metric":3356831,"status":"discard","description":"Arrays.sort in-place for percentiles (within noise)","metrics":{},"timestamp":1773549932}
+{"commit":"3135919","metric":2398656,"status":"discard","description":"JVM flags -Xmx4g -XX:+UseZGC (slower, ZGC overhead)","metrics":{},"timestamp":1773549997}
+{"commit":"3135919","metric":3468609,"status":"discard","description":"sorted SlidingState with O(n+m) merge (no improvement over quickselect)","metrics":{},"timestamp":1773550035}
+{"commit":"3135919","metric":3378378,"status":"discard","description":"bounded minute ranges in merge (branch predictor already handles null checks)","metrics":{},"timestamp":1773550142}
+{"commit":"3135919","metric":3478260,"status":"discard","description":"bucket-sorted emission + in-place percentiles (no improvement, within noise)","metrics":{},"timestamp":1773550700}
+{"commit":"3135919","metric":3430531,"status":"discard","description":"per-minute value storage for sliding windows (concatenation overhead negated savings)","metrics":{},"timestamp":1773550822}
+{"commit":"3135919","metric":3449465,"status":"discard","description":"flat-indexed output arrays (cache-unfriendly writes to minute-major layout)","metrics":{},"timestamp":1773551229}
+{"commit":"3135919","metric":3378378,"status":"discard","description":"zero-alloc percentiles + direct byte output (byte loop slower than StringBuilder)","metrics":{},"timestamp":1773551346}
+{"commit":"3135919","metric":3154574,"status":"discard","description":"double[8] sliding arrays + in-place percentiles (10% worse, too many resizes)","metrics":{},"timestamp":1773551520}
+{"commit":"3135919","metric":3318951,"status":"discard","description":"bounded merge ranges + combined merge (code overhead exceeds iteration savings)","metrics":{},"timestamp":1773551751}
+{"commit":"3135919","metric":2155172,"status":"discard","description":"single-partition processing (eliminate merge): 38% slower, sequential parsing bottleneck","metrics":{},"timestamp":1773552313}
+{"commit":"3135919","metric":3035822,"status":"discard","description":"pre-sorted sliding + merge-sort merge: 13% slower, sort+alloc overhead exceeds quickselect savings","metrics":{},"timestamp":1773552413}
+{"commit":"3135919","metric":3954132,"status":"keep","description":"sorted-order emit (no Collections.sort), parallel pct computation (3954132 ev/s, +13.6%)","metrics":{},"timestamp":1773552544}
