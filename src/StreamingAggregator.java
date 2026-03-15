@@ -16,16 +16,16 @@ public class StreamingAggregator {
     static final int MAX_MINUTES = 1500;
     static final int MAX_SENSORS = 1100;
 
-    // Unified state: tumbling aggregates + raw values for sliding percentiles
+    // Unified state: tumbling aggregates + scaled int values for sliding percentiles
     static class TumblingState {
         long count = 0;
         double sum = 0;
         double min = Double.MAX_VALUE;
         double max = -Double.MAX_VALUE;
-        double[] values = new double[8];
+        int[] values = new int[8]; // scaled by 100 (e.g., 29.19 → 2919)
         int size = 0;
 
-        void add(double value) {
+        void add(double value, int scaledValue) {
             count++;
             sum += value;
             min = Math.min(min, value);
@@ -33,7 +33,7 @@ public class StreamingAggregator {
             if (size == values.length) {
                 values = Arrays.copyOf(values, values.length * 2);
             }
-            values[size++] = value;
+            values[size++] = scaledValue;
         }
 
         void merge(TumblingState other) {
@@ -51,20 +51,20 @@ public class StreamingAggregator {
 
         double avg() { return count == 0 ? 0 : sum / count; }
 
-        static double quickselect(double[] arr, int lo, int hi, int k) {
+        static int quickselect(int[] arr, int lo, int hi, int k) {
             while (lo < hi) {
                 int mid = lo + (hi - lo) / 2;
-                if (arr[mid] < arr[lo]) { double t = arr[lo]; arr[lo] = arr[mid]; arr[mid] = t; }
-                if (arr[hi] < arr[lo]) { double t = arr[lo]; arr[lo] = arr[hi]; arr[hi] = t; }
-                if (arr[mid] < arr[hi]) { double t = arr[mid]; arr[mid] = arr[hi]; arr[hi] = t; }
-                double pivot = arr[hi];
+                if (arr[mid] < arr[lo]) { int t = arr[lo]; arr[lo] = arr[mid]; arr[mid] = t; }
+                if (arr[hi] < arr[lo]) { int t = arr[lo]; arr[lo] = arr[hi]; arr[hi] = t; }
+                if (arr[mid] < arr[hi]) { int t = arr[mid]; arr[mid] = arr[hi]; arr[hi] = t; }
+                int pivot = arr[hi];
                 int i = lo, j = hi - 1;
                 while (i <= j) {
                     while (arr[i] < pivot) i++;
                     while (j >= i && arr[j] > pivot) j--;
-                    if (i <= j) { double t = arr[i]; arr[i] = arr[j]; arr[j] = t; i++; j--; }
+                    if (i <= j) { int t = arr[i]; arr[i] = arr[j]; arr[j] = t; i++; j--; }
                 }
-                double t = arr[i]; arr[i] = arr[hi]; arr[hi] = t;
+                int t = arr[i]; arr[i] = arr[hi]; arr[hi] = t;
                 if (k == i) return arr[i];
                 else if (k < i) hi = i - 1;
                 else lo = i + 1;
@@ -210,13 +210,12 @@ public class StreamingAggregator {
             slidingEmitFutures[t] = pool.submit(() -> {
                 byte[] buf = new byte[8 << 20];
                 int pos = 0;
-                double[] combinedBuf = new double[1024];
+                int[] combinedBuf = new int[1024];
                 for (int m = mStart; m < mEnd; m++) {
                     byte[] pfx = slidingPfx[m];
                     int kEnd = Math.min(m + 4, gMax);
                     for (int s = 0; s < fsc; s++) {
-                        // Single pass: copy values and count in one loop
-                        double[] combined = combinedBuf;
+                        int[] combined = combinedBuf;
                         int p = 0;
                         for (int k = m; k <= kEnd; k++) {
                             TumblingState[] row = mergedTumbling[k];
@@ -225,7 +224,7 @@ public class StreamingAggregator {
                                 int sz = ts.size;
                                 int needed = p + sz;
                                 if (needed > combined.length) {
-                                    combinedBuf = new double[needed * 2];
+                                    combinedBuf = new int[needed * 2];
                                     System.arraycopy(combined, 0, combinedBuf, 0, p);
                                     combined = combinedBuf;
                                 }
@@ -237,15 +236,15 @@ public class StreamingAggregator {
                         int totalSize = p;
                         int i99 = Math.max(0, (99 * totalSize + 99) / 100 - 1);
                         int i50 = Math.max(0, (totalSize + 1) / 2 - 1);
-                        double p99 = TumblingState.quickselect(combined, 0, totalSize - 1, i99);
-                        double p50 = TumblingState.quickselect(combined, 0, i99, i50);
+                        int p99 = TumblingState.quickselect(combined, 0, totalSize - 1, i99);
+                        int p50 = TumblingState.quickselect(combined, 0, i99, i50);
                         if (pos + 200 > buf.length) buf = Arrays.copyOf(buf, buf.length * 2);
                         System.arraycopy(pfx, 0, buf, pos, pfx.length); pos += pfx.length;
                         System.arraycopy(sNameBytes[s], 0, buf, pos, sNameBytes[s].length); pos += sNameBytes[s].length;
                         buf[pos++] = ',';
-                        pos = appendDoubleBytes(buf, pos, p50);
+                        pos = appendScaledInt(buf, pos, p50);
                         buf[pos++] = ',';
-                        pos = appendDoubleBytes(buf, pos, p99);
+                        pos = appendScaledInt(buf, pos, p99);
                         System.arraycopy(NEW_LINE, 0, buf, pos, NEW_LINE.length); pos += NEW_LINE.length;
                     }
                 }
@@ -373,7 +372,7 @@ public class StreamingAggregator {
                 if (sIdx >= ps.sensorCount) ps.sensorCount = sIdx + 1;
             }
 
-            // Specialized double parser: values always have exactly 2 decimal places
+            // Specialized parser: compute both double (for sum/min/max) and scaled int (for percentiles)
             // Format: [-]d{1,3}.dd — compute exact value length to skip newline scan
             int di = pos + 33; // c1 + 12 + 1 = pos + 20 + 12 + 1
             byte b0 = mbb.get(di);
@@ -381,23 +380,30 @@ public class StreamingAggregator {
             if (neg) { di++; b0 = mbb.get(di); }
             byte b1 = mbb.get(di + 1);
             double value;
+            int scaledValue;
             if (b1 == '.') {
                 // d.dd (4 chars)
-                value = (b0 - '0') + ((mbb.get(di + 2) - '0') * 10 + (mbb.get(di + 3) - '0')) * 0.01;
-                pos = di + 5; // past d.dd + newline
+                int d0 = b0 - '0', d2 = mbb.get(di + 2) - '0', d3 = mbb.get(di + 3) - '0';
+                value = d0 + (d2 * 10 + d3) * 0.01;
+                scaledValue = d0 * 100 + d2 * 10 + d3;
+                pos = di + 5;
             } else {
                 byte b2 = mbb.get(di + 2);
                 if (b2 == '.') {
                     // dd.dd (5 chars, most common: 86%)
-                    value = ((b0 - '0') * 10 + (b1 - '0')) + ((mbb.get(di + 3) - '0') * 10 + (mbb.get(di + 4) - '0')) * 0.01;
-                    pos = di + 6; // past dd.dd + newline
+                    int d0 = b0 - '0', d1 = b1 - '0', d3 = mbb.get(di + 3) - '0', d4 = mbb.get(di + 4) - '0';
+                    value = (d0 * 10 + d1) + (d3 * 10 + d4) * 0.01;
+                    scaledValue = (d0 * 10 + d1) * 100 + d3 * 10 + d4;
+                    pos = di + 6;
                 } else {
                     // ddd.dd (6 chars)
-                    value = ((b0 - '0') * 100 + (b1 - '0') * 10 + (b2 - '0')) + ((mbb.get(di + 4) - '0') * 10 + (mbb.get(di + 5) - '0')) * 0.01;
-                    pos = di + 7; // past ddd.dd + newline
+                    int d0 = b0 - '0', d1 = b1 - '0', d2i = b2 - '0', d4 = mbb.get(di + 4) - '0', d5 = mbb.get(di + 5) - '0';
+                    value = (d0 * 100 + d1 * 10 + d2i) + (d4 * 10 + d5) * 0.01;
+                    scaledValue = (d0 * 100 + d1 * 10 + d2i) * 100 + d4 * 10 + d5;
+                    pos = di + 7;
                 }
             }
-            if (neg) value = -value;
+            if (neg) { value = -value; scaledValue = -scaledValue; }
 
             int eventMinute = dayOffset + hour * 60 + minute;
 
@@ -408,7 +414,7 @@ public class StreamingAggregator {
                 if (row == null) { row = new TumblingState[MAX_SENSORS]; ps.tumbling[eventMinute] = row; }
                 TumblingState ts = row[sIdx];
                 if (ts == null) { ts = new TumblingState(); row[sIdx] = ts; }
-                ts.add(value);
+                ts.add(value, scaledValue);
             }
         }
 
@@ -432,6 +438,17 @@ public class StreamingAggregator {
     private static long countLeapYears(int y) {
         if (y < 0) return 0;
         return y / 4 - y / 100 + y / 400;
+    }
+
+    private static int appendScaledInt(byte[] buf, int pos, int v) {
+        if (v < 0) { buf[pos++] = '-'; v = -v; }
+        int intPart = v / 100;
+        int fracPart = v % 100;
+        pos = appendLongBytes(buf, pos, intPart);
+        buf[pos++] = '.';
+        buf[pos++] = (byte)('0' + fracPart / 10);
+        buf[pos++] = (byte)('0' + fracPart % 10);
+        return pos;
     }
 
     private static int appendDoubleBytes(byte[] buf, int pos, double d) {

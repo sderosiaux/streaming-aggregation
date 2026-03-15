@@ -1,6 +1,6 @@
-# Streaming Aggregation: 57K to 10.5M events/sec
+# Streaming Aggregation: 57K to 10.7M events/sec
 
-A Java streaming window aggregation engine, optimized from **57,823 ev/s to 10,493,179 ev/s** (181x improvement) in **132 autonomous experiments** using [autoresearch](https://github.com/sderosiaux/claude-plugins).
+A Java streaming window aggregation engine, optimized from **57,823 ev/s to 10,741,138 ev/s** (186x improvement) in **164 autonomous experiments** using [autoresearch](https://github.com/sderosiaux/claude-plugins).
 
 Every commit in this repo is an experiment. The commit messages document the technique, the measured throughput, and the delta from the previous best.
 
@@ -46,6 +46,7 @@ Read the commit history bottom-up (`git log --oneline --reverse`) to follow the 
 9,784,735  → C2-only JIT (skip C1 tier) + AlwaysCompileLoopMethods
 9,980,039  → specialized double parser — dispatch by dot position
 10,493,179 → eliminate newline scan — compute line length from value format
+10,741,138 → int[] values for percentile quickselect — halve memory
 ```
 
 ## Key techniques
@@ -56,7 +57,7 @@ Read the commit history bottom-up (`git log --oneline --reverse`) to follow the 
 | **Parsing** | Manual ISO-8601, precomputed day offset, specialized double parser, no newline scan | +15% |
 | **Data structures** | Array-indexed [minute][sensor] layout, no HashMap | +6x |
 | **Parallelism** | 12-thread chunk parse, sensor-range merge, minute-range emit | +3x |
-| **Percentiles** | Quickselect with median-of-3 pivot, inline during emit | +12% |
+| **Percentiles** | Quickselect with median-of-3 pivot, inline during emit, int[] values (halved memory) | +15% |
 | **Output** | Direct byte[] assembly, zero-copy buffers | +17% |
 | **Memory** | Unified TumblingState fits one 64-byte cache line | +4% |
 | **JVM** | C2-only compilation, AlwaysCompileLoopMethods | +5% |
@@ -64,7 +65,7 @@ Read the commit history bottom-up (`git log --oneline --reverse`) to follow the 
 
 ## What didn't work
 
-~95 experiments were discarded. Patterns that consistently lost:
+~125 experiments were discarded. Patterns that consistently lost:
 - **Minute-range merge parallelism** (-10%): cache thrashing on shared mergedTumbling array
 - **Fused sliding+tumbling emit** (-13%): working set too large for L1/L2 cache
 - **Arrays.sort replacing quickselect** (-5%): full sort is O(n log n), quickselect is O(n)
@@ -76,6 +77,12 @@ Read the commit history bottom-up (`git log --oneline --reverse`) to follow the 
 - **Aggressive JIT inlining** (-1.6%): code bloat hurts icache on C2-only
 - **ParallelGC** (-15%): more stop-the-world pauses than G1GC for this workload
 - **Insertion sort for percentiles** (-3%): conditional branches hurt branch prediction
+- **Explicit min/max branches** (-6.5%): Math.min/max compiles to branchless FCMOV/MAXSD on x86-64
+- **Sensor-major emit ordering** (-6.4%): cross-core sharing on mergedTumbling row arrays
+- **Object compaction** (-14.5%): 864K TumblingState allocations + GC outweigh cache gains
+- **EpsilonGC** (-12.3%): memory fragmentation without compaction degrades locality
+- **Software prefetch** (-6.4%): volatile fence + extra loop overhead, OoO engine already prefetches
+- **Panama FFI for madvise** (-7.7%): FFI init overhead + THP defrag stalls
 
 ## Architecture
 
@@ -119,7 +126,7 @@ The `autoresearch.jsonl` file contains the full experiment log with metrics for 
 
 | File | Purpose |
 |------|---------|
-| `src/StreamingAggregator.java` | The optimized engine (~460 lines) |
+| `src/StreamingAggregator.java` | The optimized engine (~477 lines) |
 | `src/DataGenerator.java` | Generates deterministic test data |
 | `src/BatchValidator.java` | Correctness oracle (naive but correct) |
 | `jvm.opts` | JVM flags (C2-only, loop compilation) |
