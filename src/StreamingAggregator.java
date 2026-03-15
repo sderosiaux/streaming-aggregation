@@ -93,6 +93,9 @@ public class StreamingAggregator {
     private boolean baseSet = false;
     private final List<String> results = new ArrayList<>();
     private long watermarkMs = Long.MIN_VALUE;
+    // Scan floors: lowest minute index not yet cleaned, per type
+    private int tumblingFloor = 0;
+    private int slidingFloor = 0;
 
     public static void main(String[] args) throws IOException {
         if (args.length < 1) {
@@ -290,6 +293,13 @@ public class StreamingAggregator {
     private void emitReadyWindows() {
         StringBuilder sb = new StringBuilder(128);
 
+        // Compute scan ceiling: max minute index where windowEnd <= watermarkMs
+        int tCeil = watermarkMs == Long.MAX_VALUE ? MAX_MINUTES :
+            Math.min(MAX_MINUTES, (int) ((watermarkMs - baseMs - TUMBLING_WINDOW_MS) / 60_000) + 1);
+        int sCeil = watermarkMs == Long.MAX_VALUE ? MAX_MINUTES :
+            Math.min(MAX_MINUTES, (int) ((watermarkMs - baseMs - SLIDING_WINDOW_MS) / 60_000) + 1);
+
+        int newTFloor = tCeil;
         for (int s = 0; s < sensorCount; s++) {
             if (tumblingArr[s] == null) continue;
             if (emittedTumbling[s] == null) emittedTumbling[s] = new boolean[MAX_MINUTES];
@@ -297,13 +307,12 @@ public class StreamingAggregator {
             boolean[] emitted = emittedTumbling[s];
             String sensor = sensorNames[s];
 
-            for (int m = 0; m < MAX_MINUTES; m++) {
+            for (int m = tumblingFloor; m < tCeil; m++) {
                 TumblingState state = arr[m];
                 if (state == null) continue;
 
                 long windowStart = baseMs + (long) m * 60_000;
                 long windowEnd = windowStart + TUMBLING_WINDOW_MS;
-                if (windowEnd > watermarkMs) continue;
 
                 boolean updated = emitted[m];
                 emitted[m] = true;
@@ -321,10 +330,14 @@ public class StreamingAggregator {
 
                 if (windowEnd + ALLOWED_LATENESS_MS <= watermarkMs) {
                     arr[m] = null;
+                } else if (m < newTFloor) {
+                    newTFloor = m;
                 }
             }
         }
+        tumblingFloor = newTFloor;
 
+        int newSFloor = sCeil;
         for (int s = 0; s < sensorCount; s++) {
             if (slidingArr[s] == null) continue;
             if (emittedSliding[s] == null) emittedSliding[s] = new boolean[MAX_MINUTES];
@@ -332,13 +345,12 @@ public class StreamingAggregator {
             boolean[] emitted = emittedSliding[s];
             String sensor = sensorNames[s];
 
-            for (int m = 0; m < MAX_MINUTES; m++) {
+            for (int m = slidingFloor; m < sCeil; m++) {
                 SlidingState state = arr[m];
                 if (state == null) continue;
 
                 long windowStart = baseMs + (long) m * 60_000;
                 long windowEnd = windowStart + SLIDING_WINDOW_MS;
-                if (windowEnd > watermarkMs) continue;
 
                 boolean updated = emitted[m];
                 emitted[m] = true;
@@ -354,9 +366,12 @@ public class StreamingAggregator {
 
                 if (windowEnd + ALLOWED_LATENESS_MS <= watermarkMs) {
                     arr[m] = null;
+                } else if (m < newSFloor) {
+                    newSFloor = m;
                 }
             }
         }
+        slidingFloor = newSFloor;
     }
 
     private static void appendDouble(StringBuilder sb, double d) {
