@@ -1,25 +1,25 @@
 # Deferred Ideas
 
-## High Priority
-- Replace Instant.parse with manual ISO-8601 timestamp parser (avoid DateTimeFormatter overhead)
-- Replace String.split(",") with indexOf-based CSV parsing
-- Replace SlidingState ArrayList+sort with t-digest or quantile sketch (avoid O(n log n) per window)
-- Larger BufferedReader buffer size (e.g., 1MB)
-- Replace String.format with StringBuilder for output
-- Pre-size HashMaps based on expected window count
-- Avoid WindowKey record allocation (use primitive key encoding)
+## High Priority (based on profiling — quickselect 20%, sliding emit 19%, processChunk 13%)
+- Hardcode c2 = c1 + 12 — all sensors are "sensor_XXXX" (11 chars), eliminates 3 failed branch checks per event
+- Hardcode sensor index parse to exactly 4 digits — eliminate loop overhead
+- SWAR (8-byte batch reads via UNSAFE.getLong) for timestamp/sensor parsing
+- Skip sensor name copy for already-seen sensors — use per-partition boolean[] seen array
+- Pipeline: overlap output write with sliding emit computation (start writing tumbling while sliding still running)
+- Pre-allocate TumblingState pool to reduce GC (2.7% profile)
+- Reduce merge temp array from MAX_MINUTES to [globalMin..globalMax] range
+- Introselect: hybrid quickselect+median-of-medians for guaranteed O(n) worst case
 
 ## Medium Priority
-- Multi-threaded processing (partition by sensor, parallel streams)
-- Memory-mapped file I/O (MappedByteBuffer)
-- Custom hash map with open addressing
-- Byte-level parsing (skip String allocation for sensor IDs — intern or use byte ranges)
-- Reduce sliding window memory by using a sorted structure (TreeMap<Double,Integer>) for online percentiles
-- JVM flags: -XX:+UseG1GC, -Xmx, -XX:+AlwaysPreTouch
+- Avoid values[] dynamic resizing in add() — pre-size to expected ~7 values/minute/sensor
+- Read-ahead hint for mmap (madvise via Unsafe — MADV_SEQUENTIAL)
+- Use long-based encoding for sensor names instead of String (avoid String allocation)
+- Eliminate `new TumblingState[MAX_SENSORS]` per-minute allocation in processChunk — lazy sparse structure
+- Float instead of double for values[] — halve memory, better cache utilization (but verify precision)
+- Two-pass quickselect optimization: find p99 first, then p50 within [0..i99] (already doing this)
 
 ## Lower Priority
-- SIMD-friendly data layout (SoA vs AoS)
-- Off-heap storage for sliding window values
-- Reservoir sampling for approximate percentiles
-- Batch window emission (reduce iterator overhead)
-- Use char[] parsing instead of String
+- JVM flags: -XX:+UseParallelGC, -XX:+AlwaysPreTouch (currently using G1GC defaults)
+- NUMA-aware chunk assignment
+- Custom percentile algorithm: selection networks for small N
+- Vector API (Java 21 preview) for batch numeric operations
