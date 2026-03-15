@@ -181,11 +181,18 @@ public class StreamingAggregator {
         }
         for (Future<?> f : mergeFutures) f.get();
 
-        // Parallel emit: split minutes across threads, each builds its own StringBuilder
-        // Output order: all sliding by (minute, sensor), then all tumbling by (minute, sensor)
+        // Pre-compute prefixes: "sliding,{ts}," and "tumbling,{ts},"
+        String[] slidingPfx = new String[MAX_MINUTES];
+        String[] tumblingPfx = new String[MAX_MINUTES];
+        for (int m = 0; m < MAX_MINUTES; m++) {
+            long ws = bMs + (long) m * 60_000;
+            slidingPfx[m] = "sliding," + ws + ",";
+            tumblingPfx[m] = "tumbling," + ws + ",";
+        }
+
         int minutesPerThread = (MAX_MINUTES + nThreads - 1) / nThreads;
 
-        // Emit sliding windows in parallel — produce byte[] directly
+        // Emit sliding windows — direct append, pre-computed prefixes
         @SuppressWarnings("unchecked")
         Future<byte[]>[] slidingEmitFutures = new Future[nThreads];
         for (int t = 0; t < nThreads; t++) {
@@ -194,25 +201,21 @@ public class StreamingAggregator {
             final int fsc = sc;
             slidingEmitFutures[t] = pool.submit(() -> {
                 StringBuilder out = new StringBuilder(500_000 * 80 / nThreads);
-                StringBuilder sb2 = new StringBuilder(128);
                 for (int m = mStart; m < mEnd; m++) {
-                    long windowStart = bMs + (long) m * 60_000;
+                    String pfx = slidingPfx[m];
                     for (int s = 0; s < fsc; s++) {
                         if (slidingPcts[s] == null || slidingPcts[s][m] == null) continue;
                         double[] pcts = slidingPcts[s][m];
-                        sb2.setLength(0);
-                        sb2.append("sliding,").append(windowStart).append(',')
-                          .append(sNames[s]).append(',');
-                        appendDouble(sb2, pcts[0]); sb2.append(',');
-                        appendDouble(sb2, pcts[1]); sb2.append(",new\n");
-                        out.append(sb2);
+                        out.append(pfx).append(sNames[s]).append(',');
+                        appendDouble(out, pcts[0]); out.append(',');
+                        appendDouble(out, pcts[1]); out.append(",new\n");
                     }
                 }
                 return out.toString().getBytes();
             });
         }
 
-        // Emit tumbling windows in parallel — produce byte[] directly
+        // Emit tumbling windows — direct append, pre-computed prefixes
         @SuppressWarnings("unchecked")
         Future<byte[]>[] tumblingEmitFutures = new Future[nThreads];
         for (int t = 0; t < nThreads; t++) {
@@ -221,20 +224,16 @@ public class StreamingAggregator {
             final int fsc = sc;
             tumblingEmitFutures[t] = pool.submit(() -> {
                 StringBuilder out = new StringBuilder(500_000 * 80 / nThreads);
-                StringBuilder sb2 = new StringBuilder(128);
                 for (int m = mStart; m < mEnd; m++) {
-                    long windowStart = bMs + (long) m * 60_000;
+                    String pfx = tumblingPfx[m];
                     for (int s = 0; s < fsc; s++) {
                         if (mergedTumbling[s] == null || mergedTumbling[s][m] == null) continue;
                         TumblingState state = mergedTumbling[s][m];
-                        sb2.setLength(0);
-                        sb2.append("tumbling,").append(windowStart).append(',')
-                          .append(sNames[s]).append(',').append(state.count).append(',');
-                        appendDouble(sb2, state.sum); sb2.append(',');
-                        appendDouble(sb2, state.min); sb2.append(',');
-                        appendDouble(sb2, state.max); sb2.append(',');
-                        appendDouble(sb2, state.avg()); sb2.append(",new\n");
-                        out.append(sb2);
+                        out.append(pfx).append(sNames[s]).append(',').append(state.count).append(',');
+                        appendDouble(out, state.sum); out.append(',');
+                        appendDouble(out, state.min); out.append(',');
+                        appendDouble(out, state.max); out.append(',');
+                        appendDouble(out, state.avg()); out.append(",new\n");
                     }
                 }
                 return out.toString().getBytes();

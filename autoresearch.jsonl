@@ -42,3 +42,13 @@
 {"commit":"33db179","metric":27173913,"status":"crash","description":"fixed-offset comma (corrected): still CORRECTNESS FAIL, sliding window bug","metrics":{},"timestamp":1773553033}
 {"commit":"33db179","metric":4498425,"status":"discard","description":"fixed-offset first comma (Z-aware): no improvement, within noise","metrics":{},"timestamp":1773553102}
 {"commit":"33db179","metric":4928536,"status":"keep","description":"parallel byte[] conversion in emit threads (4928536 ev/s, +9.4%)","metrics":{},"timestamp":1773553210}
+{"commit":"4eabac9","metric":4670714,"status":"discard","description":"8MB BufferedOutputStream: 5% slower, cache pressure","metrics":{},"timestamp":1773553278}
+{"commit":"4eabac9","metric":4786979,"status":"discard","description":"cached date computation in timestamp: within noise","metrics":{},"timestamp":1773553348}
+{"commit":"4eabac9","metric":4887585,"status":"discard","description":"fast minute from hour:minute + fixed comma offsets: within noise","metrics":{},"timestamp":1773553436}
+{"commit":"4eabac9","metric":4823926,"status":"discard","description":"FileChannel output: no improvement","metrics":{},"timestamp":1773553495}
+{"commit":"4eabac9","metric":4791566,"status":"discard","description":"skip-ahead newline scan + fixed comma offsets: within noise","metrics":{},"timestamp":1773553542}
+{"commit":"4eabac9","metric":4861448,"status":"discard","description":"pipelined emit: no improvement, already overlapping","metrics":{},"timestamp":1773553599}
+{"commit":"4eabac9","metric":4870920,"status":"discard","description":"direct append (no sb2): within noise","metrics":{},"timestamp":1773553647}
+{"commit":"4eabac9","metric":4918839,"status":"discard","description":"pre-computed timestamp prefixes: within noise (5-run confirmation)","metrics":{},"timestamp":1773553721}
+{"commit":"4eabac9","metric":4789272,"status":"discard","description":"nThreads/2 chunks: no improvement, reduced parse parallelism","metrics":{},"timestamp":1773553789}
+{"commit":"4eabac9","metric":5010020,"status":"keep","description":"bundled emit: pre-computed prefixes + direct append, no sb2 (5010020 ev/s, +1.7%)","metrics":{},"timestamp":1773553858}
