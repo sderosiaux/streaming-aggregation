@@ -98,6 +98,8 @@ public class StreamingAggregator {
         String[] sensorNames = new String[MAX_SENSORS];
         int sensorCount = 0;
         long baseMs;
+        int minMinute = MAX_MINUTES;
+        int maxMinute = -1;
     }
 
     public static void main(String[] args) throws Exception {
@@ -278,13 +280,22 @@ public class StreamingAggregator {
 
     static void mergeAndComputePcts(PartitionState[] parts, int sStart, int sEnd,
                                      TumblingState[][] mergedTumbling, double[][][] slidingPcts) {
+        // Compute global active minute range across all partitions
+        int globalMin = MAX_MINUTES, globalMax = -1;
+        for (PartitionState ps : parts) {
+            if (ps.minMinute < globalMin) globalMin = ps.minMinute;
+            if (ps.maxMinute > globalMax) globalMax = ps.maxMinute;
+        }
+        if (globalMax < 0) return;
+
         double[] combinedBuf = new double[1024]; // reusable buffer to avoid per-window allocation
         for (int s = sStart; s < sEnd; s++) {
-            // Merge tumbling for this sensor across partitions — partition layout is [minute][sensor]
+            // Merge tumbling for this sensor across partitions — bounded by active range
             TumblingState[] merged = new TumblingState[MAX_MINUTES];
             boolean hasTumbling = false;
             for (PartitionState ps : parts) {
-                for (int m = 0; m < MAX_MINUTES; m++) {
+                int lo = ps.minMinute, hi = ps.maxMinute;
+                for (int m = lo; m <= hi; m++) {
                     TumblingState[] row = ps.tumbling[m];
                     if (row == null || row[s] == null) continue;
                     hasTumbling = true;
@@ -294,11 +305,12 @@ public class StreamingAggregator {
             }
             mergedTumbling[s] = hasTumbling ? merged : null;
 
-            // Merge raw per-minute values across partitions — partition layout is [minute][sensor]
+            // Merge raw per-minute values across partitions — bounded by active range
             SlidingState[] rawMerged = new SlidingState[MAX_MINUTES];
             boolean hasRaw = false;
             for (PartitionState ps : parts) {
-                for (int m = 0; m < MAX_MINUTES; m++) {
+                int lo = ps.minMinute, hi = ps.maxMinute;
+                for (int m = lo; m <= hi; m++) {
                     SlidingState[] sRow = ps.sliding[m];
                     if (sRow == null || sRow[s] == null) continue;
                     hasRaw = true;
@@ -309,7 +321,7 @@ public class StreamingAggregator {
             if (hasRaw) {
                 // Compute sliding window percentiles by combining 5 consecutive minutes
                 double[][] pcts = new double[MAX_MINUTES][];
-                for (int m = 0; m < MAX_MINUTES; m++) {
+                for (int m = Math.max(0, globalMin - 4); m <= Math.min(globalMax, MAX_MINUTES - 1); m++) {
                     int totalSize = 0;
                     int kEnd = Math.min(m + 4, MAX_MINUTES - 1);
                     for (int k = m; k <= kEnd; k++) {
@@ -390,6 +402,8 @@ public class StreamingAggregator {
             int eventMinute = (int) ((timestampMs - baseMs) / 60_000);
 
             if (eventMinute >= 0 && eventMinute < MAX_MINUTES) {
+                if (eventMinute < ps.minMinute) ps.minMinute = eventMinute;
+                if (eventMinute > ps.maxMinute) ps.maxMinute = eventMinute;
                 // Tumbling window
                 TumblingState[] row = ps.tumbling[eventMinute];
                 if (row == null) { row = new TumblingState[MAX_SENSORS]; ps.tumbling[eventMinute] = row; }

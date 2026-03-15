@@ -66,3 +66,6 @@
 {"commit":"ba2c70e","metric":5824111,"status":"keep","description":"experiment: merged bounds-check in processChunk — single if block for tumbling+sliding (5824111 ev/s, +1.4%)","metrics":{},"timestamp":1773581449}
 {"commit":"0f97e53","metric":5885815,"status":"keep","description":"experiment: hardcoded c1=lineStart+20, scan c2 from c1+8 — skip comma search loop (5885815 ev/s, +1.1%)","metrics":{},"timestamp":1773581650}
 {"commit":"0113597","metric":5966587,"status":"keep","description":"experiment: branchless c2 — chained if/else for sensor digit count, no scan loop (5966587 ev/s, +1.4%)","metrics":{},"timestamp":1773581683}
+{"commit":"317e674","metric":5672149,"status":"discard","description":"experiment: fused c2+sIdx parse with nested branching — JIT regression (5672149 ev/s, -4.9%)","metrics":{},"timestamp":1773581729}
+{"commit":"317e674","metric":4570383,"status":"discard","description":"experiment: single bulk read + parallel parse — 388MB allocation GC pressure (4570383 ev/s, -23.4%)","metrics":{},"timestamp":1773581838}
+{"commit":"317e674","metric":6016847,"status":"keep","description":"experiment: bounded merge loops by active minute range per partition (6016847 ev/s, +0.8%)","metrics":{},"timestamp":1773582083}
