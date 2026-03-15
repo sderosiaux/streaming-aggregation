@@ -69,7 +69,7 @@ public class StreamingAggregator {
             return new double[]{p50, p99};
         }
 
-        private static double quickselect(double[] arr, int lo, int hi, int k) {
+        static double quickselect(double[] arr, int lo, int hi, int k) {
             while (lo < hi) {
                 int mid = lo + (hi - lo) / 2;
                 if (arr[mid] < arr[lo]) { double t = arr[lo]; arr[lo] = arr[mid]; arr[mid] = t; }
@@ -257,6 +257,7 @@ public class StreamingAggregator {
 
     static void mergeAndComputePcts(PartitionState[] parts, int sStart, int sEnd,
                                      TumblingState[][] mergedTumbling, double[][][] slidingPcts) {
+        double[] combinedBuf = new double[1024]; // reusable buffer to avoid per-window allocation
         for (int s = sStart; s < sEnd; s++) {
             // Merge tumbling for this sensor across partitions — partition layout is [minute][sensor]
             TumblingState[] merged = new TumblingState[MAX_MINUTES];
@@ -272,24 +273,42 @@ public class StreamingAggregator {
             }
             mergedTumbling[s] = hasTumbling ? merged : null;
 
-            // Merge sliding for this sensor + compute percentiles — partition layout is [minute][sensor]
-            SlidingState[] sMerged = new SlidingState[MAX_MINUTES];
-            boolean hasSliding = false;
+            // Merge raw per-minute values across partitions — partition layout is [minute][sensor]
+            SlidingState[] rawMerged = new SlidingState[MAX_MINUTES];
+            boolean hasRaw = false;
             for (PartitionState ps : parts) {
                 for (int m = 0; m < MAX_MINUTES; m++) {
                     SlidingState[] sRow = ps.sliding[m];
                     if (sRow == null || sRow[s] == null) continue;
-                    hasSliding = true;
-                    if (sMerged[m] == null) sMerged[m] = sRow[s];
-                    else sMerged[m].merge(sRow[s]);
+                    hasRaw = true;
+                    if (rawMerged[m] == null) rawMerged[m] = sRow[s];
+                    else rawMerged[m].merge(sRow[s]);
                 }
             }
-            if (hasSliding) {
+            if (hasRaw) {
+                // Compute sliding window percentiles by combining 5 consecutive minutes
                 double[][] pcts = new double[MAX_MINUTES][];
                 for (int m = 0; m < MAX_MINUTES; m++) {
-                    if (sMerged[m] != null) {
-                        pcts[m] = sMerged[m].percentiles();
+                    int totalSize = 0;
+                    int kEnd = Math.min(m + 4, MAX_MINUTES - 1);
+                    for (int k = m; k <= kEnd; k++) {
+                        if (rawMerged[k] != null) totalSize += rawMerged[k].size;
                     }
+                    if (totalSize == 0) continue;
+                    if (totalSize > combinedBuf.length) combinedBuf = new double[totalSize];
+                    double[] combined = combinedBuf;
+                    int p = 0;
+                    for (int k = m; k <= kEnd; k++) {
+                        if (rawMerged[k] != null) {
+                            System.arraycopy(rawMerged[k].values, 0, combined, p, rawMerged[k].size);
+                            p += rawMerged[k].size;
+                        }
+                    }
+                    int i99 = Math.max(0, (int) Math.ceil(99.0 / 100.0 * totalSize) - 1);
+                    int i50 = Math.max(0, (int) Math.ceil(50.0 / 100.0 * totalSize) - 1);
+                    double p99 = SlidingState.quickselect(combined, 0, totalSize - 1, i99);
+                    double p50 = SlidingState.quickselect(combined, 0, i99, i50);
+                    pcts[m] = new double[]{p50, p99};
                 }
                 slidingPcts[s] = pcts;
             }
@@ -359,12 +378,10 @@ public class StreamingAggregator {
                 ts.add(value);
             }
 
-            // Sliding windows [minute][sensor] layout
-            int mStart = Math.max(0, eventMinute - 4);
-            int mEnd = Math.min(eventMinute, MAX_MINUTES - 1);
-            for (int m = mStart; m <= mEnd; m++) {
-                SlidingState[] sRow = ps.sliding[m];
-                if (sRow == null) { sRow = new SlidingState[MAX_SENSORS]; ps.sliding[m] = sRow; }
+            // Raw per-minute values for lazy sliding window computation
+            if (eventMinute >= 0 && eventMinute < MAX_MINUTES) {
+                SlidingState[] sRow = ps.sliding[eventMinute];
+                if (sRow == null) { sRow = new SlidingState[MAX_SENSORS]; ps.sliding[eventMinute] = sRow; }
                 SlidingState ss = sRow[sIdx];
                 if (ss == null) { ss = new SlidingState(); sRow[sIdx] = ss; }
                 ss.add(value);

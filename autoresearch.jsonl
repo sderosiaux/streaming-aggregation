@@ -55,3 +55,6 @@
 {"commit":"acef103","metric":4812319,"status":"discard","description":"bounded minute range: negligible savings (~60 empty slots)","metrics":{},"timestamp":1773553984}
 {"commit":"acef103","metric":4750593,"status":"discard","description":"fused merge+emit: 5% worse, poor cross-partition cache locality","metrics":{},"timestamp":1773554094}
 {"commit":"dcd3aac","metric":5157297,"status":"keep","description":"data layout transposition [sensor][minute] → [minute][sensor] for cache-friendly parse","metrics":{},"timestamp":1773554354}
+{"commit":"17deadc","metric":4887585,"status":"discard","description":"SlidingState initial array 64→8: resize overhead > memory savings (-5.2%)","metrics":{},"timestamp":1773554453}
+{"commit":"17deadc","metric":4899559,"status":"discard","description":"SlidingState initial array 64→16: still regresses (-5%), high GC variance","metrics":{},"timestamp":1773554481}
+{"commit":"17deadc","metric":5293806,"status":"keep","description":"lazy sliding windows: 1 raw write per event instead of 5, combine at merge time (+2.6%)","metrics":{},"timestamp":1773554715}
