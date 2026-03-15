@@ -9,21 +9,11 @@ public class StreamingAggregator {
     static final long WATERMARK_SLACK_MS = 10 * 60_000;
     static final long ALLOWED_LATENESS_MS = 10 * 60_000;
 
-    // Pre-computed: days-in-month cumulative for non-leap and leap years
     private static final int[] DAYS_CUM = {0,31,59,90,120,151,181,212,243,273,304,334};
     private static final int[] DAYS_CUM_LEAP = {0,31,60,91,121,152,182,213,244,274,305,335};
 
-    record WindowKey(String sensorId, long windowStartMs, String windowType)
-            implements Comparable<WindowKey> {
-        @Override
-        public int compareTo(WindowKey other) {
-            int cmp = this.windowType.compareTo(other.windowType);
-            if (cmp != 0) return cmp;
-            cmp = Long.compare(this.windowStartMs, other.windowStartMs);
-            if (cmp != 0) return cmp;
-            return this.sensorId.compareTo(other.sensorId);
-        }
-    }
+    // Compact key: no windowType string (separate maps for tumbling/sliding)
+    record SensorWindow(String sensorId, long windowStartMs) {}
 
     static class TumblingState {
         long count = 0;
@@ -54,28 +44,23 @@ public class StreamingAggregator {
             values[size++] = value;
         }
 
-        // Returns [p50, p99] via quickselect — O(n) average
         double[] percentiles() {
             if (size == 0) return new double[]{0, 0};
             double[] arr = Arrays.copyOf(values, size);
             int i99 = Math.max(0, (int) Math.ceil(99.0 / 100.0 * size) - 1);
             int i50 = Math.max(0, (int) Math.ceil(50.0 / 100.0 * size) - 1);
-            // Find p99 first (partitions array)
             double p99 = quickselect(arr, 0, size - 1, i99);
-            // p50 is in [0, i99], so quickselect within that range
             double p50 = quickselect(arr, 0, i99, i50);
             return new double[]{p50, p99};
         }
 
         private static double quickselect(double[] arr, int lo, int hi, int k) {
             while (lo < hi) {
-                // Median-of-three pivot
                 int mid = lo + (hi - lo) / 2;
                 if (arr[mid] < arr[lo]) { double t = arr[lo]; arr[lo] = arr[mid]; arr[mid] = t; }
                 if (arr[hi] < arr[lo]) { double t = arr[lo]; arr[lo] = arr[hi]; arr[hi] = t; }
                 if (arr[mid] < arr[hi]) { double t = arr[mid]; arr[mid] = arr[hi]; arr[hi] = t; }
                 double pivot = arr[hi];
-
                 int i = lo, j = hi - 1;
                 while (i <= j) {
                     while (arr[i] < pivot) i++;
@@ -86,7 +71,6 @@ public class StreamingAggregator {
                     }
                 }
                 double t = arr[i]; arr[i] = arr[hi]; arr[hi] = t;
-
                 if (k == i) return arr[i];
                 else if (k < i) hi = i - 1;
                 else lo = i + 1;
@@ -95,9 +79,10 @@ public class StreamingAggregator {
         }
     }
 
-    private final Map<WindowKey, TumblingState> tumblingWindows = new HashMap<>();
-    private final Map<WindowKey, SlidingState> slidingWindows = new HashMap<>();
-    private final Set<WindowKey> emittedWindows = new HashSet<>();
+    private final Map<SensorWindow, TumblingState> tumblingWindows = new HashMap<>();
+    private final Map<SensorWindow, SlidingState> slidingWindows = new HashMap<>();
+    private final Set<SensorWindow> emittedTumbling = new HashSet<>();
+    private final Set<SensorWindow> emittedSliding = new HashSet<>();
     private final List<String> results = new ArrayList<>();
     private long watermarkMs = Long.MIN_VALUE;
 
@@ -106,9 +91,7 @@ public class StreamingAggregator {
             System.err.println("Usage: StreamingAggregator <input-file>");
             System.exit(1);
         }
-
-        StreamingAggregator aggregator = new StreamingAggregator();
-        aggregator.run(args[0]);
+        new StreamingAggregator().run(args[0]);
     }
 
     void run(String inputFile) throws IOException {
@@ -119,7 +102,6 @@ public class StreamingAggregator {
             long maxEventTime = Long.MIN_VALUE;
 
             while ((line = reader.readLine()) != null) {
-                // Inline parse: find commas by indexOf
                 int c1 = line.indexOf(',');
                 if (c1 < 0) continue;
                 int c2 = line.indexOf(',', c1 + 1);
@@ -143,8 +125,8 @@ public class StreamingAggregator {
                 }
 
                 long tumblingStart = timestampMs - (timestampMs % TUMBLING_WINDOW_MS);
-                WindowKey tumblingKey = new WindowKey(sensorId, tumblingStart, "tumbling");
-                tumblingWindows.computeIfAbsent(tumblingKey, k -> new TumblingState()).add(value);
+                SensorWindow tKey = new SensorWindow(sensorId, tumblingStart);
+                tumblingWindows.computeIfAbsent(tKey, k -> new TumblingState()).add(value);
 
                 long firstSlidingStart = timestampMs - SLIDING_WINDOW_MS + SLIDING_STEP_MS;
                 firstSlidingStart = firstSlidingStart - (firstSlidingStart % SLIDING_STEP_MS);
@@ -153,8 +135,8 @@ public class StreamingAggregator {
                 for (long wStart = firstSlidingStart; wStart <= timestampMs; wStart += SLIDING_STEP_MS) {
                     long wEnd = wStart + SLIDING_WINDOW_MS;
                     if (timestampMs >= wStart && timestampMs < wEnd) {
-                        WindowKey slidingKey = new WindowKey(sensorId, wStart, "sliding");
-                        slidingWindows.computeIfAbsent(slidingKey, k -> new SlidingState()).add(value);
+                        SensorWindow sKey = new SensorWindow(sensorId, wStart);
+                        slidingWindows.computeIfAbsent(sKey, k -> new SlidingState()).add(value);
                     }
                 }
             }
@@ -171,9 +153,7 @@ public class StreamingAggregator {
         System.out.print(sb);
     }
 
-    // Parse ISO-8601 timestamp: 2025-01-01T00:00:00Z  (fixed format from DataGenerator)
     private static long parseIsoTimestamp(String line, int end) {
-        // Format: YYYY-MM-DDTHH:MM:SSZ (20 chars) or with fractional seconds
         if (end < 20) return -1;
         int year = parseInt4(line, 0);
         int month = parseInt2(line, 5);
@@ -181,8 +161,6 @@ public class StreamingAggregator {
         int hour = parseInt2(line, 11);
         int minute = parseInt2(line, 14);
         int second = parseInt2(line, 17);
-
-        // Days since epoch (1970-01-01)
         long days = daysSinceEpoch(year, month, day);
         return ((days * 24 + hour) * 60 + minute) * 60000L + second * 1000L;
     }
@@ -197,26 +175,15 @@ public class StreamingAggregator {
     }
 
     private static long daysSinceEpoch(int year, int month, int day) {
-        // Compute days from 1970-01-01
-        long y = year;
-        long totalDays = 0;
-
-        // Days from years
-        totalDays = 365 * (y - 1970);
-        // Add leap years between 1970 and year (exclusive)
+        long totalDays = 365L * (year - 1970);
         totalDays += leapYearsBetween(1970, year);
-
-        // Days from months
         boolean leap = isLeapYear(year);
-        int[] cum = leap ? DAYS_CUM_LEAP : DAYS_CUM;
-        totalDays += cum[month - 1];
+        totalDays += (leap ? DAYS_CUM_LEAP : DAYS_CUM)[month - 1];
         totalDays += day - 1;
-
         return totalDays;
     }
 
     private static long leapYearsBetween(int from, int to) {
-        // Count leap years in [from, to)
         return countLeapYears(to - 1) - countLeapYears(from - 1);
     }
 
@@ -229,65 +196,6 @@ public class StreamingAggregator {
         return (year % 4 == 0) && ((year % 100 != 0) || (year % 400 == 0));
     }
 
-    private void emitReadyWindows() {
-        StringBuilder sb = new StringBuilder(128);
-
-        Iterator<Map.Entry<WindowKey, TumblingState>> tIt = tumblingWindows.entrySet().iterator();
-        while (tIt.hasNext()) {
-            Map.Entry<WindowKey, TumblingState> entry = tIt.next();
-            WindowKey key = entry.getKey();
-            long windowEnd = key.windowStartMs + TUMBLING_WINDOW_MS;
-
-            if (windowEnd <= watermarkMs) {
-                TumblingState state = entry.getValue();
-                boolean updated = emittedWindows.contains(key);
-                emittedWindows.add(key);
-
-                sb.setLength(0);
-                sb.append("tumbling,").append(key.windowStartMs).append(',')
-                  .append(key.sensorId).append(',')
-                  .append(state.count).append(',');
-                appendDouble(sb, state.sum); sb.append(',');
-                appendDouble(sb, state.min); sb.append(',');
-                appendDouble(sb, state.max); sb.append(',');
-                appendDouble(sb, state.avg()); sb.append(',');
-                sb.append(updated ? "updated" : "new");
-                results.add(sb.toString());
-
-                if (windowEnd + ALLOWED_LATENESS_MS <= watermarkMs) {
-                    tIt.remove();
-                }
-            }
-        }
-
-        Iterator<Map.Entry<WindowKey, SlidingState>> sIt = slidingWindows.entrySet().iterator();
-        while (sIt.hasNext()) {
-            Map.Entry<WindowKey, SlidingState> entry = sIt.next();
-            WindowKey key = entry.getKey();
-            long windowEnd = key.windowStartMs + SLIDING_WINDOW_MS;
-
-            if (windowEnd <= watermarkMs) {
-                SlidingState state = entry.getValue();
-                boolean updated = emittedWindows.contains(key);
-                emittedWindows.add(key);
-
-                double[] pcts = state.percentiles();
-                sb.setLength(0);
-                sb.append("sliding,").append(key.windowStartMs).append(',')
-                  .append(key.sensorId).append(',');
-                appendDouble(sb, pcts[0]); sb.append(',');
-                appendDouble(sb, pcts[1]); sb.append(',');
-                sb.append(updated ? "updated" : "new");
-                results.add(sb.toString());
-
-                if (windowEnd + ALLOWED_LATENESS_MS <= watermarkMs) {
-                    sIt.remove();
-                }
-            }
-        }
-    }
-
-    // Fast double parser for format: [-]digits.digits
     private static double parseFastDouble(String s, int start, int end) {
         boolean neg = false;
         int i = start;
@@ -312,7 +220,64 @@ public class StreamingAggregator {
         return neg ? -result : result;
     }
 
-    // Equivalent to String.format("%.2f", d)
+    private void emitReadyWindows() {
+        StringBuilder sb = new StringBuilder(128);
+
+        Iterator<Map.Entry<SensorWindow, TumblingState>> tIt = tumblingWindows.entrySet().iterator();
+        while (tIt.hasNext()) {
+            Map.Entry<SensorWindow, TumblingState> entry = tIt.next();
+            SensorWindow key = entry.getKey();
+            long windowEnd = key.windowStartMs + TUMBLING_WINDOW_MS;
+
+            if (windowEnd <= watermarkMs) {
+                TumblingState state = entry.getValue();
+                boolean updated = emittedTumbling.contains(key);
+                emittedTumbling.add(key);
+
+                sb.setLength(0);
+                sb.append("tumbling,").append(key.windowStartMs).append(',')
+                  .append(key.sensorId).append(',')
+                  .append(state.count).append(',');
+                appendDouble(sb, state.sum); sb.append(',');
+                appendDouble(sb, state.min); sb.append(',');
+                appendDouble(sb, state.max); sb.append(',');
+                appendDouble(sb, state.avg()); sb.append(',');
+                sb.append(updated ? "updated" : "new");
+                results.add(sb.toString());
+
+                if (windowEnd + ALLOWED_LATENESS_MS <= watermarkMs) {
+                    tIt.remove();
+                }
+            }
+        }
+
+        Iterator<Map.Entry<SensorWindow, SlidingState>> sIt = slidingWindows.entrySet().iterator();
+        while (sIt.hasNext()) {
+            Map.Entry<SensorWindow, SlidingState> entry = sIt.next();
+            SensorWindow key = entry.getKey();
+            long windowEnd = key.windowStartMs + SLIDING_WINDOW_MS;
+
+            if (windowEnd <= watermarkMs) {
+                SlidingState state = entry.getValue();
+                boolean updated = emittedSliding.contains(key);
+                emittedSliding.add(key);
+
+                double[] pcts = state.percentiles();
+                sb.setLength(0);
+                sb.append("sliding,").append(key.windowStartMs).append(',')
+                  .append(key.sensorId).append(',');
+                appendDouble(sb, pcts[0]); sb.append(',');
+                appendDouble(sb, pcts[1]); sb.append(',');
+                sb.append(updated ? "updated" : "new");
+                results.add(sb.toString());
+
+                if (windowEnd + ALLOWED_LATENESS_MS <= watermarkMs) {
+                    sIt.remove();
+                }
+            }
+        }
+    }
+
     private static void appendDouble(StringBuilder sb, double d) {
         if (d < 0) {
             sb.append('-');

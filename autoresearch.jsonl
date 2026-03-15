@@ -5,3 +5,4 @@
 {"commit":"8cb0763","metric":236966,"status":"keep","description":"1MB reader buffer + sensor ID interning via HashMap","metrics":{},"timestamp":1773548561}
 {"commit":"4762190","metric":244953,"status":"keep","description":"quickselect O(n) for percentiles instead of full sort O(n log n)","metrics":{},"timestamp":1773548643}
 {"commit":"b9a99ca","metric":240853,"status":"discard","description":"fast manual double parser (no improvement, within noise)","metrics":{},"timestamp":1773548720}
+{"commit":"fd18f93","metric":270233,"status":"keep","description":"compact SensorWindow key (no type string), separate emitted sets, fast double parser","metrics":{},"timestamp":1773548865}
