@@ -1,6 +1,6 @@
-# Streaming Aggregation: 57K to 11.3M events/sec
+# Streaming Aggregation: 57K to 11.4M events/sec
 
-A Java streaming window aggregation engine, optimized from **57,823 ev/s to 11,261,261 ev/s** (195x improvement) in **~185 autonomous experiments** using [autoresearch](https://github.com/sderosiaux/claudecode-autoresearch).
+A Java streaming window aggregation engine, optimized from **57,823 ev/s to 11,441,647 ev/s** (198x improvement) in **167 autonomous experiments** using [autoresearch](https://github.com/sderosiaux/claudecode-autoresearch).
 
 Every commit in this repo is an experiment. The commit messages document the technique, the measured throughput, and the delta from the previous best.
 
@@ -51,6 +51,7 @@ Read the commit history bottom-up (`git log --oneline --reverse`) to follow the 
 11,061,946 → digit-pair lookup tables + integer avg + direct fd output
 11,261,261 → bulk MBB copy into stack-local byte[] buffer
 11,261,261 → branchless Lomuto partition in quickselect (A/B +8%)
+11,441,647 → skip sensor name String allocation — generate from indices (A/B +4.7%)
 ```
 
 ## Key techniques
@@ -69,7 +70,7 @@ Read the commit history bottom-up (`git log --oneline --reverse`) to follow the 
 
 ## What didn't work
 
-~140 experiments were discarded. Patterns that consistently lost:
+~125 experiments were discarded. Patterns that consistently lost:
 - **Minute-range merge parallelism** (-10%): cache thrashing on shared mergedTumbling array
 - **Fused sliding+tumbling emit** (-13%): working set too large for L1/L2 cache
 - **Arrays.sort replacing quickselect** (-5%): full sort is O(n log n), quickselect is O(n)

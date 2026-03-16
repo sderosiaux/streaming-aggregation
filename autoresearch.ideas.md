@@ -1,22 +1,30 @@
 # Deferred Ideas
 
-## High Priority (sliding emit 20.8%, quickselect 18.8%, parse 10.2%)
-- Skip sensor name String allocation for already-seen sensors — use boolean[] seen array
-- Introselect: hybrid quickselect+median-of-medians for guaranteed O(n) worst case
-- Incremental sliding window: when advancing m→m+1, remove minute m values and add minute m+5 (avoid full copy+quickselect)
-- 4KB block buffer for parse: read 4KB from MBB instead of 48 bytes/line, reduce per-line bounds-check overhead (~3.4% of CPU)
-- Counting sort for percentiles if value range is bounded (histogram in L1-sized bucket array)
+## High Priority — ALL TRIED
+- ~~Skip sensor name String allocation~~ — **KEPT (+4.7%)**, generate names from indices
+- ~~Introselect~~ — FAILED (-3%): depth check overhead per iteration, fallback never triggers for N=30
+- ~~Incremental sliding window~~ — FAILED (-20%): copy+reinsert overhead exceeds full gather+quickselect
+- ~~4KB block buffer for parse~~ — FAILED: MBB.get() overhead reduced by other opts, block management overhead
+- ~~Counting sort for percentiles~~ — FAILED (crash): N=30 too small, 6000+ bucket histogram dwarfs quickselect
 
-## Medium Priority
-- Use long-based encoding for sensor names instead of String (avoid String allocation)
-- NIO FileChannel for output (scatter-gather writev)
-- Reduce [no_Java_frame] overhead (19.9%): JIT warmup, GC, page faults
+## Medium Priority — ALL TRIED
+- ~~Long-based sensor encoding~~ — MOOT: sensor name removed from hot path by skip-alloc optimization
+- ~~NIO FileChannel scatter-gather writev~~ — FAILED (-8.6%): ByteBuffer.wrap + dispatch overhead exceeds syscall savings
+- ~~Reduce [no_Java_frame] overhead~~ — EXHAUSTED via 8 sub-experiments:
+  - UseAdaptiveSizePolicy=false (neutral)
+  - ReservedCodeCacheSize=512m (neutral)
+  - mbb.load() pre-fault pages (neutral, file in page cache)
+  - Fixed heap -Xms1g -Xmx1g (neutral, reduces variance only)
+  - CICompilerCount=4 (-7%, steals CPU from compute)
+  - -XX:-BackgroundCompilation (-29%, blocks threads during C2 compilation)
+  - MaxGCPauseMillis=5 (-5%, more frequent GC cycles)
+  - SerialGC (-25%, STW blocks all 12 threads)
 
-## Lower Priority
-- NUMA-aware chunk assignment
-- Custom percentile algorithm: selection networks for small N
-- Vector API (Java 21+ incubator) for batch numeric operations
-- Reduce merge contention with lock-free CAS on TumblingState slots
+## Lower Priority — ALL TRIED OR BLOCKED
+- ~~NUMA-aware chunk assignment~~ — N/A: single socket AMD Ryzen 5 3600
+- ~~Selection networks for small N~~ — FAILED (-20%): bitonic sort O(N log²N)=240 comparators vs quickselect O(N)≈95
+- ~~Vector API~~ — BLOCKED: requires --add-modules jdk.incubator.vector for javac, autoresearch.sh not in scope
+- ~~Lock-free CAS on TumblingState slots~~ — N/A: no merge contention (sensor-range parallelism)
 
 ## Tried and Kept (do not retry — already applied)
 - Batch MBB reads: bulk copy 48 bytes into stack-local byte[] (+1.8%, A/B +5.5%)
@@ -37,6 +45,7 @@
 - Multi-threaded parallel chunk processing with byte[] parsing
 - Array-indexed [minute][sensor] layout replacing HashMaps
 - Direct sensor index from digits, eliminates HashMap lookup
+- Skip sensor name String allocation — generate from indices (+4.7%)
 
 ## Tried and Failed (do not retry)
 
@@ -49,7 +58,9 @@
 - p99 as O(n) max scan (-3% to -6%): p50 loses partial ordering benefit from p99 quickselect
 - Reverse percentile order p50 first (neutral): range narrowing offset by lost partial ordering
 - Remove median-of-3 pivot (-3.3%): worse pivot quality increases iteration count
-- Selection networks for small N — not tried yet but insertion sort variants all failed
+- Bitonic sort network (-20%): O(N log²N)=240 comparators vs O(N)≈95 quickselect comparisons
+- Introselect hybrid quickselect+median-of-medians (-3%): depth check overhead, fallback never triggers
+- Counting sort histogram for N=30 (crash): 6000+ buckets for N=30 is 100× more work than quickselect
 
 ### Memory / Data Structures
 - Adding fields to TumblingState (-5%): pushes object past 64-byte cache line boundary
@@ -88,6 +99,7 @@
 - 4MB output buffer (-5%): larger buffer evicts cache
 - Bypass System.out with FileDescriptor.out (-8%): pipe buffer contention
 - FileChannel output (no improvement)
+- NIO FileChannel scatter-gather writev (-8.6%): ByteBuffer.wrap + GatheringByteChannel dispatch overhead
 - Sensor-range sliding with contiguous value tape (-3%): tape building overhead offsets locality
 
 ### I/O / Parsing
@@ -108,8 +120,18 @@
 - ParallelGC (-15%): more stop-the-world pauses than G1GC
 - EpsilonGC (-12.3%): memory fragmentation without compaction degrades locality
 - ZGC (slower): ZGC overhead for this workload
+- ShenandoahGC (-8.3%): concurrent barrier overhead exceeds GC pause reduction
 - GraalVM CE/Oracle 21 (-20-30%): Graal JIT doesn't optimize MBB.get() as well as HotSpot C2
 - AlwaysPreTouch (no effect)
+- UseTransparentHugePages (no effect, THP already enabled system-wide)
+- UseAdaptiveSizePolicy=false (neutral)
+- ReservedCodeCacheSize=512m InitialCodeCacheSize=512m (neutral)
+- Fixed heap -Xms1g -Xmx1g (neutral, reduces variance only)
+- CICompilerCount=4 (-7%): extra compiler threads steal CPU
+- BackgroundCompilation=false (-29%): synchronous C2 blocks all threads
+- MaxGCPauseMillis=5 (-5%): more frequent GC cycles
+- SerialGC (-25%): STW blocks all 12 compute threads
+- CompileThreshold tuning (previous session, no improvement)
 
 ### Miscellaneous
 - Explicit min/max branches (-6.5%): Math.min/max compiles to branchless FCMOV/MAXSD on x86-64
@@ -122,3 +144,4 @@
 - Cumulative size table for fast sliding window skip (-3%): 6MB array adds cache pressure
 - Unroll 5-minute sliding k-loop (noise): JIT already optimizes the loop
 - Hardcode c2=c1+12 + unrolled 4-digit sensor index (noise): JIT already predicts the pattern
+- mbb.load() pre-fault pages (neutral): 388MB sequential read overhead, file already in page cache
