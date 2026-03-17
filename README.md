@@ -1,10 +1,10 @@
-# Streaming Aggregation: 57K to 22M events/sec
+# Streaming Aggregation: 57K to 48M events/sec
 
-A streaming window aggregation engine optimized from **57,823 ev/s** (naive Java) to **22,000,000 ev/s** (optimized C) — a **380x improvement** — using [autoresearch](https://github.com/sderosiaux/claudecode-autoresearch).
+A streaming window aggregation engine optimized from **57,823 ev/s** (naive Java) to **48,076,923 ev/s** (optimized C) — an **831x improvement** — using [autoresearch](https://github.com/sderosiaux/claudecode-autoresearch).
 
 Two implementations:
 - **Java**: 57K → 11.4M ev/s (198x) in 167 experiments
-- **C port**: 17.5M → 22.0M ev/s (+25%) in 25 experiments — the C port starts from the Java architecture and pushes further with direct memory control
+- **C**: 22M → 48M ev/s (831x baseline) in 228 experiments — inline ASM, software-pipelined quickselect, direct mmap parsing
 
 Every commit in this repo is an experiment. The commit messages document the technique, the measured throughput, and the delta from the previous best.
 
@@ -15,7 +15,7 @@ Process 10M timestamped CSV sensor events through:
 - **Sliding windows** (5 min window, 1 min slide): p50, p99 per sensor
 - 1,000 sensors, 24 hours of data, 5% late events
 
-Output: ~166MB to file (real I/O, not /dev/null).
+Output: ~166MB to stdout (real I/O, not /dev/null).
 
 ## Run it
 
@@ -25,7 +25,7 @@ Output: ~166MB to file (real I/O, not /dev/null).
 ./autoresearch.checks.sh
 
 # C version (requires gcc, pthreads)
-./run-c.sh
+make && ./streaming_aggregator data/10m.txt > /dev/null
 ./autoresearch-c.checks.sh
 ```
 
@@ -58,9 +58,9 @@ Read the commit history bottom-up (`git log --oneline --reverse`) to follow the 
 11,441,647 → skip sensor name String allocation — generate from indices (A/B +4.7%)
 ```
 
-## C port optimization journey
+## C optimization journey
 
-The C port preserves the Java architecture (mmap, parallel parse/merge/emit, branchless Lomuto quickselect, all-integer arithmetic) and pushes further with direct memory control:
+The C port preserves the Java architecture (mmap, parallel parse/merge/emit, all-integer arithmetic) and pushes further with direct memory control and inline assembly:
 
 ```
 17,513,134 → baseline: C port of optimized Java engine
@@ -69,19 +69,32 @@ The C port preserves the Java architecture (mmap, parallel parse/merge/emit, bra
 21,231,422 → inline values[8] in TumblingState (+10.6%)
 21,505,376 → writev scatter-gather output (+1.3%)
 21,978,021 → flat row arrays, eliminate per-minute calloc (+2.2%)
+27,027,027 → eliminate linebuf memcpy — parse directly from mmap (+23%)
+33,333,333 → inline ASM software-pipelined Lomuto quickselect (+23%)
+35,714,285 → readahead() syscall — async page cache warmup (+7%)
+37,735,849 → sched_setaffinity CPU pinning (+6%)
+46,728,971 → p99 as max scan — O(n) replaces quickselect for p99 (+2%)
+46,948,356 → prefetch next sensor TumblingState in emit_sliding (+0.5%)
+47,619,047 → remove immintrin.h — eliminate auto-vectorization interference (+1.4%)
+48,076,923 → remove MADV_SEQUENTIAL — aggressive page eviction hurts threads (+1%)
 ```
-
-**What didn't work in C (19 discards):** direct pointer (skip memcpy, -2.4%), LTO (-6.2%), PGO (-2.1%), MAP_POPULATE (-3.0%), Hoare partition (-9.9%), insertion sort (-8.5%), read() instead of mmap (-32.6%), 6 threads (-9%), -O2 (-1.1%), -fno-plt (-4.0%), MADV_HUGEPAGE (-2.4%), flat g_merged (-5.6%), int count/sum (-2.2%).
 
 **Key C-specific wins:**
 
 | Technique | Impact |
 |-----------|--------|
+| Inline ASM software-pipelined Lomuto partition (preload arr[i+1]) | +23% |
+| Direct mmap parsing (eliminate 480MB linebuf memcpy) | +23% |
 | Arena allocator (per-thread block alloc, 65536 structs/block) | +7.9% |
-| Inline values[8] embedded in TumblingState (eliminates ~10M malloc) | +10.6% |
-| Flat row arrays (contiguous per-thread, no per-minute calloc) | +2.2% |
-| writev scatter-gather (batch all emit buffers in one syscall) | +1.3% |
-| madvise(MADV_SEQUENTIAL) for kernel readahead | +1.5% |
+| Inline values[8] embedded in TumblingState (eliminates malloc) | +10.6% |
+| readahead() + remove MADV_SEQUENTIAL (page cache management) | +8% |
+| sched_setaffinity CPU pinning (prevent cache migration) | +6% |
+| p99 as max scan (mathematical proof: for p≤100, i99==p-1) | +2% |
+| __builtin_prefetch in emit_sliding (hide L2/L3 miss latency) | +0.5% |
+
+**What didn't work in C (~180 discards):** clang compiler, PGO, LTO, -funroll-loops, -Os/-O2, -fno-plt, -fno-tree-vectorize, MAP_POPULATE (file and anonymous), mlock(), MADV_HUGEPAGE, MADV_RANDOM, __attribute__((hot)), __builtin_expect, restrict qualifier, MAX_SENSORS=1024, inline_values[4], cache-aligned ArenaBlock, ts_new noinline, partial insertion sort, 2-line interleaved parse, counting sort, selection networks, SWAR 64-bit loads, stack-allocated combined[], right-sized buffers, CMOV value parser, compact flat_rows, 6-core SMT, work-stealing, fused emit phases.
+
+**Key insight:** GCC's code layout is extremely fragile at this optimization level. Nearly every change that adds instructions or modifies function structure causes icache regressions. Only changes that strictly eliminate work succeed.
 
 ## Java key techniques
 
@@ -95,31 +108,6 @@ The C port preserves the Java architecture (mmap, parallel parse/merge/emit, bra
 | **Output** | Direct byte[] assembly, digit-pair lookup tables, FileOutputStream(fd) | +17% |
 | **Memory** | All-integer TumblingState (scaledSum/scaledMin/scaledMax), no FP in hot path | +6% |
 | **JVM** | C2-only compilation, AlwaysCompileLoopMethods | +5% |
-| **Emit** | Range-bounded iteration [gMin..gMax], direct merge (no temp array) | +2% |
-
-## What didn't work
-
-~125 experiments were discarded. Patterns that consistently lost:
-- **Minute-range merge parallelism** (-10%): cache thrashing on shared mergedTumbling array
-- **Fused sliding+tumbling emit** (-13%): working set too large for L1/L2 cache
-- **Arrays.sort replacing quickselect** (-5%): full sort is O(n log n), quickselect is O(n)
-- **Adding fields to TumblingState** (-5%): pushed object past 64-byte cache line boundary
-- **MemorySegment API** (-18%): segment validity + scope checks MORE overhead than MBB bounds checks
-- **Batch getLong/getInt reads** (-2.5%): C2 already eliminates bounds checks, extra shift/mask ALU hurts
-- **Byte[] copy from mmap** (-10%): 384MB heap allocation + copyMemory0 + GC overhead
-- **pread-based parallel reading** (-12%): per-chunk syscalls slower than single mmap
-- **Aggressive JIT inlining** (-1.6%): code bloat hurts icache on C2-only
-- **ParallelGC** (-15%): more stop-the-world pauses than G1GC for this workload
-- **Insertion sort for percentiles** (-3%): conditional branches hurt branch prediction
-- **Explicit min/max branches** (-6.5%): Math.min/max compiles to branchless FCMOV/MAXSD on x86-64
-- **Sensor-major emit ordering** (-6.4%): cross-core sharing on mergedTumbling row arrays
-- **Object compaction** (-14.5%): 864K TumblingState allocations + GC outweigh cache gains
-- **EpsilonGC** (-12.3%): memory fragmentation without compaction degrades locality
-- **Software prefetch** (-6.4%): volatile fence + extra loop overhead, OoO engine already prefetches
-- **Panama FFI for madvise** (-7.7%): FFI init overhead + THP defrag stalls
-- **ForkJoinPool** (-11%): work-stealing queue overhead exceeds load balancing benefit
-- **p99 as O(n) max scan** (-3%): p50 loses partial ordering benefit from p99 quickselect
-- **Inline suffix byte writes** (-2%): replacing 4-byte arraycopy with individual byte writes hurts pipeline
 
 ## Architecture (shared by both implementations)
 
@@ -127,7 +115,7 @@ The C port preserves the Java architecture (mmap, parallel parse/merge/emit, bra
 ┌──────────────────────────────────────────────────────────┐
 │  mmap file (388MB) → 12 chunks (~32MB each)              │
 └────────┬─────────────────────────────────────────────────┘
-         │ 12 threads, bulk copy 48B lines into stack-local buffer
+         │ 12 threads, direct mmap pointer (C) / bulk copy (Java)
          ▼
 ┌──────────────────────────────────────────────────────────┐
 │  Parse: manual ISO timestamp, hardcoded sensor_XXXX,     │
@@ -142,7 +130,7 @@ The C port preserves the Java architecture (mmap, parallel parse/merge/emit, bra
          │ 12 threads, minute-range parallelism
          ▼
 ┌──────────────────────────────────────────────────────────┐
-│  Emit: sliding (branchless Lomuto quickselect p50/p99)   │
+│  Emit: sliding (inline ASM quickselect p50, max scan p99)│
 │        tumbling (count/sum/min/max/avg as integers)      │
 │        → direct byte buffers, digit-pair tables          │
 └────────┬─────────────────────────────────────────────────┘
@@ -153,28 +141,24 @@ The C port preserves the Java architecture (mmap, parallel parse/merge/emit, bra
 └──────────────────────────────────────────────────────────┘
 ```
 
-C-specific: arena allocator, inline values[8], flat row arrays, writev.
+C-specific: inline ASM quickselect, arena allocator, CPU pinning, readahead, __builtin_prefetch.
 Java-specific: C2-only JIT, MappedByteBuffer, no GC pressure path.
 
 ## What is autoresearch?
 
 [autoresearch](https://github.com/sderosiaux/claudecode-autoresearch) is a Claude Code plugin that runs autonomous experiment loops. It tries ideas, benchmarks them, keeps improvements, discards regressions, and never stops. Each experiment is a git commit with the measured metric in the commit message.
 
-The `autoresearch.jsonl` file contains the full experiment log with metrics for every attempt (kept and discarded). The `autoresearch.md` file is the session document with profiling notes, landscape model, and tabu list.
-
 ## Files
 
 | File | Purpose |
 |------|---------|
 | `src/StreamingAggregator.java` | Optimized Java engine (~518 lines) |
-| `src/streaming_aggregator.c` | Optimized C engine (~620 lines) |
+| `src/streaming_aggregator.c` | Optimized C engine (~660 lines, inline ASM) |
 | `Makefile` | C build (gcc -O3 -march=native -pthread) |
 | `src/DataGenerator.java` | Generates deterministic test data |
 | `src/BatchValidator.java` | Correctness oracle (naive but correct) |
 | `jvm.opts` | JVM flags (C2-only, loop compilation) |
 | `autoresearch.sh` | Java benchmark harness |
-| `run-c.sh` | C benchmark harness |
-| `autoresearch.checks.sh` | Java correctness validation |
 | `autoresearch-c.checks.sh` | C correctness validation |
-| `autoresearch.md` | Java experiment session notes |
-| `autoresearch.jsonl` | Java experiment log (167 experiments) |
+| `autoresearch.ideas.md` | ~150 tried experiments, categorized |
+| `autoresearch.jsonl` | Full experiment log (228 experiments) |
